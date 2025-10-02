@@ -122,3 +122,121 @@
     (ok next-sequence)
   )
 )
+
+;; Update existing asset metadata
+(define-public (update-asset-registration 
+  (asset-sequence uint) 
+  (revised-descriptor (string-ascii 64)) 
+  (revised-volume uint) 
+  (revised-information (string-ascii 128)) 
+  (revised-tags (list 10 (string-ascii 32)))
+)
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+    (asserts! (> (len revised-descriptor) u0) descriptor-format-error)
+    (asserts! (< (len revised-descriptor) u65) descriptor-format-error)
+    (asserts! (> revised-volume u0) volume-parameter-error)
+    (asserts! (< revised-volume u1000000000) volume-parameter-error)
+    (asserts! (> (len revised-information) u0) descriptor-format-error)
+    (asserts! (< (len revised-information) u129) descriptor-format-error)
+    (asserts! (validate-tag-collection revised-tags) tag-validation-error)
+
+    (map-set asset-catalog
+      { asset-sequence: asset-sequence }
+      (merge catalog-entry { 
+        asset-descriptor: revised-descriptor, 
+        asset-volume: revised-volume, 
+        asset-descriptor-extended: revised-information, 
+        classification-tags: revised-tags 
+      })
+    )
+    (ok true)
+  )
+)
+
+;; Remove asset from registry
+(define-public (cancel-asset-registration (asset-sequence uint))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+
+    (map-delete asset-catalog { asset-sequence: asset-sequence })
+    (ok true)
+  )
+)
+
+;; Transfer asset ownership
+(define-public (transfer-asset-custody (asset-sequence uint) (new-custodian principal))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+
+    (map-set asset-catalog
+      { asset-sequence: asset-sequence }
+      (merge catalog-entry { asset-custodian: new-custodian })
+    )
+    (ok true)
+  )
+)
+
+;; AUTHORIZATION MANAGEMENT
+
+;; Grant third-party access
+(define-public (authorize-third-party-access (asset-sequence uint) (authorized-party principal))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+    (ok true)
+  )
+)
+
+;; Revoke third-party access
+(define-public (revoke-third-party-access (asset-sequence uint) (third-party principal))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+    (asserts! (not (is-eq third-party tx-sender)) administrative-restriction-error)
+
+    (map-delete authorization-matrix { asset-sequence: asset-sequence, authorized-party: third-party })
+    (ok true)
+  )
+)
+
+;; Check authorization status
+(define-public (check-authorization-status (asset-sequence uint) (evaluating-party principal))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+      (current-custodian (get asset-custodian catalog-entry))
+      (access-permitted (default-to 
+        false 
+        (get access-status 
+          (map-get? authorization-matrix { asset-sequence: asset-sequence, authorized-party: evaluating-party })
+        )
+      ))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+
+    (ok {
+      is-custodian: (is-eq evaluating-party current-custodian),
+      has-authorization: access-permitted,
+      asset-id: asset-sequence
+    })
+  )
+)
