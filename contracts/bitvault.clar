@@ -240,3 +240,137 @@
     })
   )
 )
+
+;; METADATA MANAGEMENT
+
+;; Add classification tags
+(define-public (extend-classification-tags (asset-sequence uint) (additional-tags (list 10 (string-ascii 32))))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+      (existing-tags (get classification-tags catalog-entry))
+      (combined-tags (unwrap! (as-max-len? (concat existing-tags additional-tags) u10) tag-validation-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+    (asserts! (validate-tag-collection additional-tags) tag-validation-error)
+
+    (map-set asset-catalog
+      { asset-sequence: asset-sequence }
+      (merge catalog-entry { classification-tags: combined-tags })
+    )
+    (ok combined-tags)
+  )
+)
+
+;; Get asset classification
+(define-public (get-asset-classification (asset-sequence uint))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+      (current-custodian (get asset-custodian catalog-entry))
+      (access-permitted (default-to 
+        false 
+        (get access-status 
+          (map-get? authorization-matrix { asset-sequence: asset-sequence, authorized-party: tx-sender })
+        )
+      ))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! 
+      (or 
+        (is-eq tx-sender current-custodian)
+        access-permitted
+        (is-eq tx-sender admin-authority)
+      ) 
+      permission-denied-error
+    )
+
+    (ok (get classification-tags catalog-entry))
+  )
+)
+
+;; Update asset volume
+(define-public (update-asset-volume (asset-sequence uint) (new-volume uint))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! (is-eq (get asset-custodian catalog-entry) tx-sender) unauthorized-operation-error)
+    (asserts! (> new-volume u0) volume-parameter-error)
+    (asserts! (< new-volume u1000000000) volume-parameter-error)
+
+    (map-set asset-catalog
+      { asset-sequence: asset-sequence }
+      (merge catalog-entry { asset-volume: new-volume })
+    )
+    (ok true)
+  )
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Apply emergency hold
+(define-public (apply-emergency-restriction (asset-sequence uint))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+      (restriction-marker "ADMINISTRATIVE-HOLD")
+      (existing-tags (get classification-tags catalog-entry))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! 
+      (or 
+        (is-eq tx-sender admin-authority)
+        (is-eq (get asset-custodian catalog-entry) tx-sender)
+      ) 
+      administrative-restriction-error
+    )
+
+    (ok true)
+  )
+)
+
+;; VERIFICATION SERVICES
+
+;; Validate asset integrity and custody chain
+(define-public (validate-asset-integrity (asset-sequence uint) (expected-custodian principal))
+  (let
+    (
+      (catalog-entry (unwrap! (map-get? asset-catalog { asset-sequence: asset-sequence }) entity-not-found-error))
+      (current-custodian (get asset-custodian catalog-entry))
+      (registration-height (get registration-block catalog-entry))
+      (access-permitted (default-to 
+        false 
+        (get access-status 
+          (map-get? authorization-matrix { asset-sequence: asset-sequence, authorized-party: tx-sender })
+        )
+      ))
+    )
+    (asserts! (asset-is-registered asset-sequence) entity-not-found-error)
+    (asserts! 
+      (or 
+        (is-eq tx-sender current-custodian)
+        access-permitted
+        (is-eq tx-sender admin-authority)
+      ) 
+      permission-denied-error
+    )
+
+    (if (is-eq current-custodian expected-custodian)
+      (ok {
+        validation-passed: true,
+        verification-block: stacks-block-height,
+        blocks-elapsed: (- stacks-block-height registration-height),
+        custodian-verified: true
+      })
+      (ok {
+        validation-passed: false,
+        verification-block: stacks-block-height,
+        blocks-elapsed: (- stacks-block-height registration-height),
+        custodian-verified: false
+      })
+    )
+  )
+)
